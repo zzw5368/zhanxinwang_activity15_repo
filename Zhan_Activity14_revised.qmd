@@ -1,0 +1,318 @@
+---
+title: "Activity 14 – First QMD File"
+author: "Zhan Wang"
+date: today
+format:
+  pdf:
+    toc: false
+    geometry: margin=1in
+execute:
+  echo: false
+  warning: false
+  message: false
+tbl-cap-location: top
+fig-cap-location: top
+---
+
+# Armed Forces Data Wrangling Redux (Activities #08 and #10)
+
+This section revisits the June 2025 Armed Forces dataset and demonstrates how to wrangle, clean, and restructure the data into an individual-level dataset that is ready for analysis. The original file has multiple header rows and combined branch/sex labels that must be parsed before we can create meaningful frequency tables.
+
+The table below summarizes the number of **Army Enlisted** personnel by sex across each enlisted rank. Each row represents one rank (E1–E9), and the columns show the number of males, females, and (where present) unknown sex at that rank. Because the data were expanded to one row per person, the counts reflect actual totals of individual soldiers.
+
+**Table 1. Frequency of Sex by Rank among Army Enlisted Personnel.**
+
+```{r}
+library(tidyverse)
+library(gt)
+
+build_groups <- function(file_path) {
+  raw <- readr::read_csv(file_path, col_names = FALSE, show_col_types = FALSE)
+
+  branch_row <- as.character(raw[1, ])
+  sex_row    <- as.character(raw[2, ])
+
+  new_names <- ifelse(
+    is.na(sex_row) | sex_row == "",
+    branch_row,
+    paste(branch_row, sex_row, sep = "_")
+  )
+  new_names[is.na(new_names)] <- "unknown"
+
+  data <- raw[-c(1, 2), ]
+  colnames(data) <- new_names
+  colnames(data)[1] <- "pay_grade"
+
+  groups <- data |>
+    pivot_longer(
+      -pay_grade,
+      names_to = "branch_sex",
+      values_to = "count_raw"
+    ) |>
+    filter(str_detect(count_raw, "\\d")) |>
+    mutate(count = parse_number(count_raw)) |>
+    separate(
+      branch_sex,
+      into = c("branch", "sex"),
+      sep = "_",
+      fill = "right",
+      extra = "merge"
+    ) |>
+    mutate(
+      branch = str_to_title(branch),
+      sex = coalesce(str_to_title(sex), "Unknown")
+    ) |>
+    select(pay_grade, branch, sex, count)
+
+  return(groups)
+}
+
+attach_ranks <- function(groups_df, rank_file_path) {
+  ranks <- readr::read_csv(rank_file_path, show_col_types = FALSE) |>
+    mutate(
+      pay_grade = as.character(pay_grade),
+      branch = str_to_title(branch)
+    )
+
+  groups_df |>
+    mutate(pay_grade = as.character(pay_grade)) |>
+    left_join(ranks, by = c("pay_grade", "branch"))
+}
+
+to_individuals <- function(groups_with_rank_df) {
+  groups_with_rank_df |>
+    tidyr::uncount(weights = count, .remove = TRUE)
+}
+
+groups <- build_groups("data/US_Armed_Forces_(6_2025).csv") |>
+  attach_ranks("data/Armed_Forces_Ranks.csv")
+
+individuals <- to_individuals(groups)
+
+army_enlisted <- individuals |>
+  filter(branch == "Army") |>
+  filter(str_starts(pay_grade, "E")) |>
+  filter(!is.na(rank))
+
+freq_tbl <- army_enlisted |>
+  count(sex, rank, name = "n") |>
+  pivot_wider(
+    names_from = sex,
+    values_from = n,
+    values_fill = 0
+  ) |>
+  arrange(rank)
+
+gt_tbl <- freq_tbl |>
+  gt(rowname_col = NULL) |>
+  tab_caption(
+    "Table 1. Army Enlisted: Frequency of Individuals by Sex and Rank"
+  ) |>
+  fmt_integer(columns = where(is.numeric)) |>
+  cols_label(
+    rank = "Rank",
+    Male = "Male",
+    Female = "Female",
+    Unknown = "Unknown"
+  )
+
+gt_tbl
+```
+
+From the table, we see that enlisted ranks follow a pyramid structure, with the largest counts in the lowest grades and steadily fewer individuals in the senior ranks. Male personnel heavily outnumber female personnel at every rank, and the gap tends to widen at higher grades. These patterns suggest that sex and rank are not independent for this subgroup of the Army.
+
+---
+
+# Popular Baby Names (Activity #13)
+
+This section examines long-term trends in U.S. baby name popularity using the `babynames` dataset. I focus on two names, **Liam** and **Emma**, because both have become extremely popular in recent decades and have interesting trajectories over time.
+
+**Figure 1. Popularity of the Names Liam and Emma Over Time.**
+
+```{r}
+library(babynames)
+
+chosen_names <- c("Liam", "Emma")
+
+baby_subset <- babynames |>
+  filter(name %in% chosen_names) |>
+  group_by(year, name) |>
+  summarise(total_births = sum(n), .groups = "drop")
+
+baby_plot <- ggplot(
+  data = baby_subset,
+  mapping = aes(
+    x = year,
+    y = total_births,
+    color = name,
+    linetype = name
+  )
+) +
+  geom_line(linewidth = 1.1) +
+  scale_color_brewer(palette = "Dark2") +
+  labs(
+    title = "Trends in Popular Baby Names, 1880–Present",
+    subtitle = "Baby name counts based on U.S. Social Security data",
+    x = "Year",
+    y = "Number of Births",
+    color = "Name",
+    linetype = "Name",
+    caption = "Figure 1. Time series showing popularity of selected baby names over time.",
+    alt = "Time-series line plot with two lines, one for Liam and one for Emma, showing their popularity from 1880 to the present."
+  ) +
+  theme_minimal(base_size = 13)
+
+baby_plot
+```
+
+The time-series plot shows that **Emma** has several waves of popularity, including a major resurgence beginning in the 1990s. In contrast, **Liam** is rare for most of the historical record but rises sharply in the late 20th and early 21st centuries to become one of the most popular names. These trends highlight how naming conventions change over generations and how some names follow clear cycles of rise and decline.
+
+---
+
+# What You Feel You’ve Learned So Far
+
+Throughout this course, I have become much more comfortable working with data in R and communicating results through clear, reproducible reports. At the beginning, even basic wrangling tasks like reshaping tables or filtering rows felt difficult, especially when datasets were messy or had multiple header rows. Over time, the tidyverse workflow started to make more sense, and I learned how each step in the pipeline contributes to a final, polished result.
+
+I especially enjoyed creating visualizations, since it was rewarding to design plots that both look clean and convey the main message quickly to the reader. Writing in Quarto also pushed me to be more intentional about separating narrative from code, adding informative captions, and including alt text so the graphics are accessible. While I still have more to learn, I now feel more confident structuring projects, reading documentation, and building reports that another person could run and understand.
+
+---
+
+# Code Appendix
+
+```{r, echo=TRUE}
+# Armed Forces Data Wrangling Code
+
+library(tidyverse)
+library(gt)
+
+build_groups <- function(file_path) {
+  raw <- readr::read_csv(file_path, col_names = FALSE, show_col_types = FALSE)
+
+  branch_row <- as.character(raw[1, ])
+  sex_row    <- as.character(raw[2, ])
+
+  new_names <- ifelse(
+    is.na(sex_row) | sex_row == "",
+    branch_row,
+    paste(branch_row, sex_row, sep = "_")
+  )
+  new_names[is.na(new_names)] <- "unknown"
+
+  data <- raw[-c(1, 2), ]
+  colnames(data) <- new_names
+  colnames(data)[1] <- "pay_grade"
+
+  groups <- data |>
+    pivot_longer(
+      -pay_grade,
+      names_to = "branch_sex",
+      values_to = "count_raw"
+    ) |>
+    filter(str_detect(count_raw, "\\d")) |>
+    mutate(count = parse_number(count_raw)) |>
+    separate(
+      branch_sex,
+      into = c("branch", "sex"),
+      sep = "_",
+      fill = "right",
+      extra = "merge"
+    ) |>
+    mutate(
+      branch = str_to_title(branch),
+      sex = coalesce(str_to_title(sex), "Unknown")
+    ) |>
+    select(pay_grade, branch, sex, count)
+
+  return(groups)
+}
+
+attach_ranks <- function(groups_df, rank_file_path) {
+  ranks <- readr::read_csv(rank_file_path, show_col_types = FALSE) |>
+    mutate(
+      pay_grade = as.character(pay_grade),
+      branch = str_to_title(branch)
+    )
+
+  groups_df |>
+    mutate(pay_grade = as.character(pay_grade)) |>
+    left_join(ranks, by = c("pay_grade", "branch"))
+}
+
+to_individuals <- function(groups_with_rank_df) {
+  groups_with_rank_df |>
+    tidyr::uncount(weights = count, .remove = TRUE)
+}
+
+groups <- build_groups("data/US_Armed_Forces_(6_2025).csv") |>
+  attach_ranks("data/Armed_Forces_Ranks.csv")
+
+individuals <- to_individuals(groups)
+
+army_enlisted <- individuals |>
+  dplyr::filter(branch == "Army") |>
+  dplyr::filter(str_starts(pay_grade, "E")) |>
+  dplyr::filter(!is.na(rank))
+
+freq_tbl <- army_enlisted |>
+  dplyr::count(sex, rank, name = "n") |>
+  tidyr::pivot_wider(
+    names_from = sex,
+    values_from = n,
+    values_fill = 0
+  ) |>
+  dplyr::arrange(rank)
+
+gt_tbl <- freq_tbl |>
+  gt(rowname_col = NULL) |>
+  tab_caption(
+    "Table 1. Army Enlisted: Frequency of Individuals by Sex and Rank"
+  ) |>
+  fmt_integer(columns = where(is.numeric)) |>
+  cols_label(
+    rank = "Rank",
+    Male = "Male",
+    Female = "Female",
+    Unknown = "Unknown"
+  )
+
+gt_tbl
+```
+
+```{r, echo=TRUE}
+# Popular Baby Names Project Code
+
+library(tidyverse)
+library(babynames)
+
+chosen_names <- c("Liam", "Emma")
+
+baby_subset <- babynames |>
+  filter(name %in% chosen_names) |>
+  group_by(year, name) |>
+  summarise(total_births = sum(n), .groups = "drop")
+
+baby_plot <- ggplot(
+  data = baby_subset,
+  mapping = aes(
+    x = year,
+    y = total_births,
+    color = name,
+    linetype = name
+  )
+) +
+  geom_line(linewidth = 1.1) +
+  scale_color_brewer(palette = "Dark2") +
+  labs(
+    title = "Trends in Popular Baby Names, 1880–Present",
+    subtitle = "Baby name counts based on U.S. Social Security data",
+    x = "Year",
+    y = "Number of Births",
+    color = "Name",
+    linetype = "Name",
+    caption = "Figure 1. Time series showing popularity of selected baby names over time.",
+    alt = "Time-series line plot with two lines, one for Liam and one for Emma, showing their popularity from 1880 to the present."
+  ) +
+  theme_minimal(base_size = 13)
+
+baby_plot
+```
